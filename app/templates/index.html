@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ZKP Authentication Framework</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="logo">ZKP<span>Auth</span></a>
+        <ul class="nav-links">
+            <li><a href="/register">Register</a></li>
+            <li><a href="/login">Login</a></li>
+            <li><a href="/reset">Password Reset</a></li>
+            <li><a href="/logs">Security Logs</a></li>
+        </ul>
+    </nav>
+
+    <div class="container">
+        <div class="hero">
+            <h1>ZKP-Enhanced <span>Authentication</span> Framework</h1>
+            <p>A secure authentication system demonstrating Zero-Knowledge Proof inspired verification,
+               context-bound password reset, replay attack prevention, and deterministic session revocation.</p>
+        </div>
+
+        <div class="feature-grid">
+            <div class="feature-card">
+                <div class="icon">🔐</div>
+                <h3>ZKP-Style Proof</h3>
+                <p>Password reset requires cryptographic proof using HMAC-SHA256. The password is never transmitted.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">🔄</div>
+                <h3>Replay Prevention</h3>
+                <p>Each reset increments the lifecycle counter, making all previous proofs invalid.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">📱</div>
+                <h3>Multi-Factor Auth</h3>
+                <p>Password reset requires both OTP verification and cryptographic proof.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">🚫</div>
+                <h3>Session Revocation</h3>
+                <p>After password reset, all existing sessions are immediately invalidated.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">📊</div>
+                <h3>Lifecycle Tracking</h3>
+                <p>Every authentication state change is tracked and visible.</p>
+            </div>
+            <div class="feature-card">
+                <div class="icon">🛡️</div>
+                <h3>Context-Bound Reset</h3>
+                <p>Password reset is bound to the user's current lifecycle state.</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>🚀 Getting Started</h2>
+            <ol style="color: #ccc; line-height: 2.2; padding-left: 20px;">
+                <li><a href="/register" style="color: #00d4ff;">Register</a> — Create account (reset_counter=0, session_version=1)</li>
+                <li><a href="/login" style="color: #00d4ff;">Login</a> — Get JWT token with session_version</li>
+                <li><a href="/dashboard" style="color: #00d4ff;">Dashboard</a> — View protected session and state</li>
+                <li><a href="/reset" style="color: #00d4ff;">Password Reset</a> — OTP → Verify Proof → Reset</li>
+                <li><a href="/logs" style="color: #00d4ff;">Security Logs</a> — View all security events</li>
+            </ol>
+        </div>
+    </div>
+</body>
+</html>
