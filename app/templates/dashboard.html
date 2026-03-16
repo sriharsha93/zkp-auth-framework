@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - ZKP Auth</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="logo">ZKP<span>Auth</span></a>
+        <ul class="nav-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/register">Register</a></li>
+            <li><a href="/login">Login</a></li>
+            <li><a href="/reset">Reset</a></li>
+            <li><a href="/logs">Logs</a></li>
+            <li><a href="#" onclick="logout()">Logout</a></li>
+        </ul>
+    </nav>
+    <div class="container">
+        <div class="card">
+            <h2>📊 Protected Dashboard</h2>
+            <p style="color:#aaa;margin-bottom:15px;">Requires valid JWT with matching session_version. After password reset, this session is invalidated.</p>
+            <button class="btn btn-primary" onclick="loadDashboard()">Verify Session</button>
+            <button class="btn btn-danger" onclick="logout()" style="margin-left:10px;">Logout</button>
+            <div id="dash-result" class="hidden"></div>
+        </div>
+        <div id="state-section" class="card hidden">
+            <h2>🔄 Lifecycle State</h2>
+            <div class="state-display">
+                <div class="state-item"><div class="label">Username</div><div class="value" id="d-user" style="font-size:1.2em">-</div></div>
+                <div class="state-item"><div class="label">Reset Counter</div><div class="value" id="d-rc">-</div></div>
+                <div class="state-item"><div class="label">Session Ver (DB)</div><div class="value success" id="d-sv">-</div></div>
+                <div class="state-item"><div class="label">Session Ver (Token)</div><div class="value" id="d-tsv">-</div></div>
+            </div>
+            <div class="status-box status-info" style="margin-top:15px;">
+                💡 <strong>Session Revocation:</strong><br>
+                Token version = <span id="i-tsv">?</span> | DB version = <span id="i-dsv">?</span><br>
+                If these differ (after reset), session is rejected.
+            </div>
+        </div>
+        <div class="card">
+            <h2>🧪 Test Old Token</h2>
+            <p style="color:#aaa;margin-bottom:15px;">Paste an old JWT token to test session revocation.</p>
+            <div class="form-group">
+                <label>Old JWT Token</label>
+                <input type="text" id="old-token" placeholder="Paste old token here">
+            </div>
+            <button class="btn btn-warning" onclick="testOld()">Test Old Token</button>
+            <div id="old-result" class="hidden"></div>
+        </div>
+    </div>
+    <script>
+    window.onload = function() { if(localStorage.getItem('jwt_token')) loadDashboard(); };
+
+    async function loadDashboard() {
+        const token = localStorage.getItem('jwt_token');
+        const r = document.getElementById('dash-result');
+        if (!token) { r.className='status-box status-error'; r.textContent='❌ No token. Please login.'; return; }
+        try {
+            const res = await fetch('/api/dashboard', { headers:{'Authorization':`Bearer ${token}`} });
+            const data = await res.json();
+            if (res.ok) {
+                r.className='status-box status-success';
+                r.textContent=`✅ Session Valid! Welcome, ${data.username}`;
+                document.getElementById('state-section').classList.remove('hidden');
+                document.getElementById('d-user').textContent=data.username;
+                document.getElementById('d-rc').textContent=data.reset_counter;
+                document.getElementById('d-sv').textContent=data.session_version;
+                document.getElementById('d-tsv').textContent=data.token_session_version;
+                document.getElementById('i-tsv').textContent=data.token_session_version;
+                document.getElementById('i-dsv').textContent=data.session_version;
+            } else {
+                r.className='status-box status-error';
+                r.textContent=`❌ Session Rejected: ${data.detail}`;
+                document.getElementById('state-section').classList.add('hidden');
+            }
+        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+    }
+
+    async function testOld() {
+        const t = document.getElementById('old-token').value.trim();
+        const r = document.getElementById('old-result');
+        if (!t) { r.className='status-box status-error'; r.textContent='Paste a token'; return; }
+        try {
+            const res = await fetch('/api/dashboard', { headers:{'Authorization':`Bearer ${t}`} });
+            const data = await res.json();
+            if (res.ok) {
+                r.className='status-box status-warning';
+                r.textContent='⚠️ Token still valid (no reset occurred since issued)';
+            } else {
+                r.className='status-box status-error';
+                r.textContent=`🛡️ OLD TOKEN REJECTED!\n\n${data.detail}`;
+            }
+        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+    }
+
+    function logout() {
+        localStorage.removeItem('jwt_token');
+        localStorage.removeItem('username');
+        location.href='/login';
+    }
+    </script>
+</body>
+</html>
