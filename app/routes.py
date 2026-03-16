@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
+import csv
+import os
 
 from app.database import get_db
 from app.models import User, OTPStore, SecurityLog
@@ -14,8 +17,114 @@ from app.security import (
 
 router = APIRouter()
 
+# CSV file paths
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+USERS_CSV = os.path.join(DATA_DIR, "users.csv")
+LOGS_CSV = os.path.join(DATA_DIR, "security_logs.csv")
+TOKENS_CSV = os.path.join(DATA_DIR, "tokens.csv")
 
-# Request Models
+
+# ============================================================
+# CSV HELPER FUNCTIONS
+# ============================================================
+
+def init_csv_files():
+    """Create CSV files with headers if they don't exist."""
+    if not os.path.exists(USERS_CSV):
+        with open(USERS_CSV, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'user_id', 'username', 'email', 'reset_counter',
+                'session_version', 'registered_at'
+            ])
+
+    if not os.path.exists(LOGS_CSV):
+        with open(LOGS_CSV, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'log_id', 'user_id', 'event_type', 'details', 'timestamp'
+            ])
+
+    if not os.path.exists(TOKENS_CSV):
+        with open(TOKENS_CSV, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'user_id', 'username', 'token', 'session_version',
+                'issued_at', 'status'
+            ])
+
+
+def append_user_csv(user_id, username, email, reset_counter, session_version):
+    """Add a user record to CSV."""
+    init_csv_files()
+    with open(USERS_CSV, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            user_id, username, email, reset_counter,
+            session_version, datetime.now(timezone.utc).isoformat()
+        ])
+
+
+def append_log_csv(log_id, user_id, event_type, details):
+    """Add a security log to CSV."""
+    init_csv_files()
+    with open(LOGS_CSV, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            log_id, user_id, event_type, details,
+            datetime.now(timezone.utc).isoformat()
+        ])
+
+
+def append_token_csv(user_id, username, token, session_version, status="ACTIVE"):
+    """Add a token record to CSV."""
+    init_csv_files()
+    with open(TOKENS_CSV, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            user_id, username, token[:50] + "...", session_version,
+            datetime.now(timezone.utc).isoformat(), status
+        ])
+
+
+def update_user_csv_after_reset(user_id, username, email, new_rc, new_sv):
+    """Add updated user state to CSV after password reset."""
+    init_csv_files()
+    with open(USERS_CSV, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            user_id, username, email, new_rc,
+            new_sv, f"UPDATED:{datetime.now(timezone.utc).isoformat()}"
+        ])
+
+
+def get_user_count_from_db(db: Session) -> int:
+    """Get total registered users from database."""
+    return db.query(User).count()
+
+
+def get_all_users_from_db(db: Session) -> list:
+    """Get all users from database."""
+    users = db.query(User).all()
+    return [
+        {
+            "user_id": u.id,
+            "username": u.username,
+            "email": u.email,
+            "reset_counter": u.reset_counter,
+            "session_version": u.session_version,
+            "created_at": str(u.created_at)
+        }
+        for u in users
+    ]
+
+
+# ============================================================
+# REQUEST MODELS
+# ============================================================
+
 class RegisterRequest(BaseModel):
     username: str
     email: str
@@ -47,7 +156,14 @@ def log_event(db: Session, user_id: int, event_type: str, details: str):
     entry = SecurityLog(user_id=user_id, event_type=event_type, details=details)
     db.add(entry)
     db.commit()
+    db.refresh(entry)
+    # Also save to CSV
+    append_log_csv(entry.id, user_id, event_type, details)
 
+
+# ============================================================
+# API ENDPOINTS
+# ============================================================
 
 # 1. REGISTER
 @router.post("/api/register")
@@ -73,15 +189,21 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(new_user)
 
+    # Save to CSV
+    append_user_csv(new_user.id, req.username, req.email, 0, 1)
+
     log_event(db, new_user.id, "REGISTRATION",
               f"User '{req.username}' registered. reset_counter=0, session_version=1")
+
+    total_users = get_user_count_from_db(db)
 
     return {
         "message": "Registration successful",
         "user_id": new_user.id,
         "username": new_user.username,
         "reset_counter": new_user.reset_counter,
-        "session_version": new_user.session_version
+        "session_version": new_user.session_version,
+        "total_registered_users": total_users
     }
 
 
@@ -97,6 +219,9 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
 
     token = create_jwt_token(user.id, user.username, user.session_version)
     current_proof = generate_proof(user.password_hash, user.reset_counter)
+
+    # Save token to CSV
+    append_token_csv(user.id, user.username, token, user.session_version, "ACTIVE")
 
     log_event(db, user.id, "LOGIN_SUCCESS",
               f"User '{req.username}' logged in. session_version={user.session_version}")
@@ -129,6 +254,8 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="User not found")
 
     if payload["session_version"] != user.session_version:
+        # Log token rejection to CSV
+        append_token_csv(user.id, user.username, token, payload["session_version"], "REJECTED")
         log_event(db, user.id, "SESSION_REJECTED",
                   f"Token version ({payload['session_version']}) != DB version ({user.session_version})")
         raise HTTPException(
@@ -147,14 +274,13 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     }
 
 
-# 4. REQUEST RESET (generate OTP)
+# 4. REQUEST RESET
 @router.post("/api/request-reset")
 def request_reset(req: ResetRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email).first()
     if not user:
         raise HTTPException(status_code=404, detail="Email not found")
 
-    # Invalidate old OTPs
     db.query(OTPStore).filter(
         OTPStore.user_id == user.id, OTPStore.is_used == False
     ).update({"is_used": True})
@@ -184,7 +310,7 @@ def request_reset(req: ResetRequest, db: Session = Depends(get_db)):
     }
 
 
-# 5. VERIFY OTP + ZKP PROOF
+# 5. VERIFY OTP + PROOF
 @router.post("/api/verify-otp")
 def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email).first()
@@ -198,7 +324,6 @@ def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
     if not otp_entry:
         raise HTTPException(status_code=400, detail="No valid OTP found. Request a new one.")
 
-    # Check expiry
     now = datetime.now(timezone.utc)
     expires = otp_entry.expires_at
     if expires.tzinfo is None:
@@ -209,12 +334,10 @@ def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
         log_event(db, user.id, "OTP_EXPIRED", "OTP expired")
         raise HTTPException(status_code=400, detail="OTP expired. Request a new one.")
 
-    # Check OTP code
     if otp_entry.otp_code != req.otp:
         log_event(db, user.id, "OTP_INVALID", "Wrong OTP entered")
         raise HTTPException(status_code=400, detail="Invalid OTP code")
 
-    # VERIFY ZKP PROOF
     if not verify_proof(req.proof, user.password_hash, user.reset_counter):
         log_event(db, user.id, "PROOF_FAILED",
                   f"ZKP proof failed for reset_counter={user.reset_counter}")
@@ -253,7 +376,6 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     old_sv = user.session_version
     old_proof = generate_proof(user.password_hash, user.reset_counter)
 
-    # Update password and increment counters
     user.password_hash = hash_password(req.new_password)
     user.reset_counter += 1
     user.session_version += 1
@@ -262,9 +384,17 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
 
     new_proof = generate_proof(user.password_hash, user.reset_counter)
 
+    # Update CSV with new state
+    update_user_csv_after_reset(user.id, user.username, user.email,
+                                 user.reset_counter, user.session_version)
+
+    # Mark old tokens as revoked in CSV
+    append_token_csv(user.id, user.username, "ALL_OLD_TOKENS",
+                     old_sv, f"REVOKED_AT_RESET")
+
     log_event(db, user.id, "PASSWORD_RESET_COMPLETE",
-              f"reset_counter: {old_rc}→{user.reset_counter}, "
-              f"session_version: {old_sv}→{user.session_version}")
+              f"reset_counter: {old_rc}->{user.reset_counter}, "
+              f"session_version: {old_sv}->{user.session_version}")
     log_event(db, user.id, "SESSIONS_REVOKED",
               f"All sessions with version {old_sv} invalidated")
 
@@ -280,7 +410,7 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     }
 
 
-# 7. TEST REPLAY ATTACK
+# 7. TEST REPLAY
 @router.post("/api/test-replay")
 def test_replay(req: ReplayTestRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email).first()
@@ -293,7 +423,7 @@ def test_replay(req: ReplayTestRequest, db: Session = Depends(get_db)):
     if is_valid:
         return {
             "replay_blocked": False,
-            "message": "Proof is still valid (no reset occurred since this proof was generated)",
+            "message": "Proof still valid (no reset since generated)",
             "current_reset_counter": user.reset_counter
         }
     else:
@@ -301,7 +431,7 @@ def test_replay(req: ReplayTestRequest, db: Session = Depends(get_db)):
                   f"Replay blocked! reset_counter={user.reset_counter}")
         return {
             "replay_blocked": True,
-            "message": "REPLAY ATTACK BLOCKED! The proof is no longer valid.",
+            "message": "REPLAY ATTACK BLOCKED! Proof is no longer valid.",
             "submitted_proof": req.old_proof[:20] + "...",
             "expected_proof": expected[:20] + "...",
             "current_reset_counter": user.reset_counter,
@@ -342,3 +472,50 @@ def get_user_state(username: str, db: Session = Depends(get_db)):
         "current_proof": proof,
         "created_at": str(user.created_at)
     }
+
+
+# 10. GET ALL USERS (with count)
+@router.get("/api/all-users")
+def get_all_users(db: Session = Depends(get_db)):
+    users = get_all_users_from_db(db)
+    return {
+        "total_users": len(users),
+        "users": users
+    }
+
+
+# 11. DOWNLOAD CSV FILES
+@router.get("/api/download/users-csv")
+def download_users_csv():
+    init_csv_files()
+    if not os.path.exists(USERS_CSV):
+        raise HTTPException(status_code=404, detail="No user data yet")
+    return FileResponse(
+        USERS_CSV,
+        media_type="text/csv",
+        filename="users_data.csv"
+    )
+
+
+@router.get("/api/download/logs-csv")
+def download_logs_csv():
+    init_csv_files()
+    if not os.path.exists(LOGS_CSV):
+        raise HTTPException(status_code=404, detail="No log data yet")
+    return FileResponse(
+        LOGS_CSV,
+        media_type="text/csv",
+        filename="security_logs.csv"
+    )
+
+
+@router.get("/api/download/tokens-csv")
+def download_tokens_csv():
+    init_csv_files()
+    if not os.path.exists(TOKENS_CSV):
+        raise HTTPException(status_code=404, detail="No token data yet")
+    return FileResponse(
+        TOKENS_CSV,
+        media_type="text/csv",
+        filename="tokens_data.csv"
+    )
