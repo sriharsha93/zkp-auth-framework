@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Register - ZKP Auth</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="logo">ZKP<span>Auth</span></a>
+        <ul class="nav-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/login">Login</a></li>
+            <li><a href="/reset">Reset</a></li>
+            <li><a href="/logs">Logs</a></li>
+        </ul>
+    </nav>
+    <div class="container">
+        <div class="card">
+            <h2>📝 User Registration</h2>
+            <p style="color:#aaa;margin-bottom:20px;">Password will be hashed with bcrypt. Lifecycle state initialized: reset_counter=0, session_version=1.</p>
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" id="reg-username" placeholder="Min 3 characters">
+            </div>
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" id="reg-email" placeholder="Your email">
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="reg-password" placeholder="Min 6 characters">
+            </div>
+            <button class="btn btn-primary" onclick="register()">Register</button>
+            <div id="reg-result" class="hidden"></div>
+        </div>
+    </div>
+    <script>
+    async function register() {
+        const username = document.getElementById('reg-username').value.trim();
+        const email = document.getElementById('reg-email').value.trim();
+        const password = document.getElementById('reg-password').value;
+        const r = document.getElementById('reg-result');
+        if (!username || !email || !password) { r.className='status-box status-error'; r.textContent='Fill all fields'; return; }
+        try {
+            const res = await fetch('/api/register', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({username, email, password})
+            });
+            const data = await res.json();
+            if (res.ok) {
+                r.className='status-box status-success';
+                r.textContent=`✅ Registration Successful!\n\nUsername: ${data.username}\nUser ID: ${data.user_id}\nReset Counter: ${data.reset_counter}\nSession Version: ${data.session_version}\n\nYou can now login.`;
+            } else {
+                r.className='status-box status-error';
+                r.textContent=`❌ ${data.detail}`;
+            }
+        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ Error: ${e.message}`; }
+    }
+    </script>
+</body>
+</html>
