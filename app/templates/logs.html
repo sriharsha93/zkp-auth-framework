@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Security Logs - ZKP Auth</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="logo">ZKP<span>Auth</span></a>
+        <ul class="nav-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/register">Register</a></li>
+            <li><a href="/login">Login</a></li>
+            <li><a href="/dashboard">Dashboard</a></li>
+            <li><a href="/reset">Reset</a></li>
+        </ul>
+    </nav>
+    <div class="container">
+        <div class="card">
+            <h2>📋 Security Event Logs</h2>
+            <p style="color:#aaa;margin-bottom:15px;">Audit trail: registrations, logins, resets, proof verifications, replay attempts, session revocations.</p>
+            <button class="btn btn-primary" onclick="loadLogs()">Load All Logs</button>
+            <button class="btn btn-warning" onclick="toggleRefresh()" style="margin-left:10px;" id="ref-btn">Auto Refresh: OFF</button>
+        </div>
+        <div class="card">
+            <h2>🔍 User State Lookup</h2>
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" id="lu-user" placeholder="Enter username">
+            </div>
+            <button class="btn btn-primary" onclick="lookupUser()">Look Up</button>
+            <div id="lu-result" class="hidden"></div>
+        </div>
+        <div class="card">
+            <h2>📜 Event Timeline</h2>
+            <div id="logs-box"><p style="color:#666;">Click "Load All Logs" to view events.</p></div>
+        </div>
+    </div>
+    <script>
+    let refInt = null;
+
+    async function loadLogs() {
+        const c = document.getElementById('logs-box');
+        try {
+            const res = await fetch('/api/security-logs');
+            const d = await res.json();
+            if (!d.logs.length) { c.innerHTML='<p style="color:#666;">No logs yet.</p>'; return; }
+            let h = '';
+            d.logs.forEach(l => {
+                h += `<div class="log-entry event-${l.event_type}">
+                    <div class="log-time">🕐 ${l.timestamp}</div>
+                    <div class="log-event">[${l.event_type}] User ID: ${l.user_id || 'N/A'}</div>
+                    <div class="log-details">${l.details || ''}</div>
+                </div>`;
+            });
+            c.innerHTML = h;
+        } catch(e) { c.innerHTML=`<p style="color:#ff6b6b;">Error: ${e.message}</p>`; }
+    }
+
+    async function lookupUser() {
+        const u = document.getElementById('lu-user').value.trim();
+        const r = document.getElementById('lu-result');
+        if (!u) { r.className='status-box status-error'; r.textContent='Enter username'; return; }
+        try {
+            const res = await fetch(`/api/user-state/${u}`);
+            const d = await res.json();
+            if (res.ok) {
+                r.className='status-box status-info';
+                r.textContent=`📊 ${d.username}\n\nEmail: ${d.email}\nReset Counter: ${d.reset_counter}\nSession Version: ${d.session_version}\nCurrent Proof: ${d.current_proof}\nCreated: ${d.created_at}`;
+            } else { r.className='status-box status-error'; r.textContent=`❌ ${d.detail}`; }
+        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+    }
+
+    function toggleRefresh() {
+        const btn = document.getElementById('ref-btn');
+        if (refInt) { clearInterval(refInt); refInt=null; btn.textContent='Auto Refresh: OFF'; btn.className='btn btn-warning'; }
+        else { loadLogs(); refInt=setInterval(loadLogs,3000); btn.textContent='Auto Refresh: ON'; btn.className='btn btn-success'; }
+    }
+    </script>
+</body>
+</html>
