@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Password Reset - ZKP Auth</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="logo">ZKP<span>Auth</span></a>
+        <ul class="nav-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/register">Register</a></li>
+            <li><a href="/login">Login</a></li>
+            <li><a href="/dashboard">Dashboard</a></li>
+            <li><a href="/logs">Logs</a></li>
+        </ul>
+    </nav>
+    <div class="container">
+
+        <!-- Progress -->
+        <div class="card" style="text-align:center;">
+            <h2>🔒 Secure Password Reset</h2>
+            <p style="color:#aaa;margin-bottom:15px;">Requires OTP + ZKP-style cryptographic proof verification.</p>
+            <div class="steps">
+                <div class="step active" id="s1">1</div>
+                <div class="step" id="s2">2</div>
+                <div class="step" id="s3">3</div>
+                <div class="step" id="s4">4</div>
+            </div>
+            <p style="color:#666;font-size:0.85em;margin-top:10px;">Request OTP → Verify OTP+Proof → New Password → Complete</p>
+        </div>
+
+        <!-- Step 1 -->
+        <div id="step1" class="card">
+            <h2>Step 1: Request Reset</h2>
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" id="reset-email" placeholder="Your registered email">
+            </div>
+            <button class="btn btn-primary" onclick="requestReset()">Request OTP</button>
+            <div id="r1" class="hidden"></div>
+        </div>
+
+        <!-- Step 2 -->
+        <div id="step2" class="card hidden">
+            <h2>Step 2: Verify OTP & ZKP Proof</h2>
+            <div class="status-box status-info">
+                <strong>🔑 ZKP Proof:</strong> proof = HMAC-SHA256(password_hash, reset_counter)<br>
+                Server recomputes independently. Password never sent.
+            </div>
+            <div class="form-group">
+                <label>OTP Code</label>
+                <input type="text" id="otp-code" placeholder="6-digit OTP" maxlength="6">
+            </div>
+            <h3>Current Proof (auto-filled):</h3>
+            <div class="proof-display" id="proof-show">Waiting...</div>
+            <input type="hidden" id="proof-val">
+            <br>
+            <button class="btn btn-primary" onclick="verifyOTP()">Verify OTP & Proof</button>
+            <div id="r2" class="hidden"></div>
+        </div>
+
+        <!-- Step 3 -->
+        <div id="step3" class="card hidden">
+            <h2>Step 3: Set New Password</h2>
+            <div class="status-box status-warning">
+                ⚠️ After reset: reset_counter++ (old proofs invalid), session_version++ (old sessions invalid)
+            </div>
+            <div class="form-group">
+                <label>New Password</label>
+                <input type="password" id="new-pass" placeholder="Min 6 characters">
+            </div>
+            <div class="form-group">
+                <label>Confirm Password</label>
+                <input type="password" id="conf-pass" placeholder="Confirm">
+            </div>
+            <input type="hidden" id="reset-tok">
+            <button class="btn btn-primary" onclick="resetPass()">Reset Password</button>
+            <div id="r3" class="hidden"></div>
+        </div>
+
+        <!-- Step 4 -->
+        <div id="step4" class="card hidden">
+            <h2>Step 4: Complete ✅</h2>
+            <div id="r4"></div>
+        </div>
+
+        <!-- Replay Test -->
+        <div class="card">
+            <h2>🧪 Replay Attack Test</h2>
+            <p style="color:#aaa;margin-bottom:15px;">After reset, paste old proof here to see it blocked.</p>
+            <div class="form-group">
+                <label>Email</label>
+                <input type="email" id="rep-email" placeholder="Email">
+            </div>
+            <div class="form-group">
+                <label>Old Proof</label>
+                <input type="text" id="rep-proof" placeholder="Paste old proof">
+            </div>
+            <button class="btn btn-danger" onclick="testReplay()">Test Replay</button>
+            <div id="rep-result" class="hidden"></div>
+        </div>
+    </div>
+
+    <script>
+    let email = '';
+
+    async function requestReset() {
+        email = document.getElementById('reset-email').value.trim();
+        const r = document.getElementById('r1');
+        if (!email) { r.className='status-box status-error'; r.textContent='Enter email'; return; }
+        try {
+            const res = await fetch('/api/request-reset', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({email})
+            });
+            const d = await res.json();
+            if (res.ok) {
+                r.className='status-box status-success';
+                r.textContent=`✅ OTP: ${d.otp}\nExpires in: ${d.expires_in_seconds}s\nReset Counter: ${d.reset_counter}\n\n${d.note}`;
+                document.getElementById('step2').classList.remove('hidden');
+                document.getElementById('proof-show').textContent=d.current_proof;
+                document.getElementById('proof-val').value=d.current_proof;
+                document.getElementById('s1').className='step completed';
+                document.getElementById('s2').className='step active';
+                document.getElementById('rep-email').value=email;
+                document.getElementById('rep-proof').value=d.current_proof;
+            } else { r.className='status-box status-error'; r.textContent=`❌ ${d.detail}`; }
+        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+    }
+
+    async function verifyOTP() {
+        const otp = document.getElementById('otp-code').value.trim();
+        const proof = document.getElementById('proof-val').value;
+        const r = document.getElementById('r2');
+        if (!otp) { r.className='status-box status-error'; r.textContent='Enter OTP'; return; }
+        try {
+            const res = await fetch('/api/verify-otp', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({email, otp, proof})
+            });
+            const d = await res.json();
+            if (res.ok) {
+                r.className='status-box status-success';
+                r.textContent=`✅ OTP Verified: ${d.otp_verified}\nProof Verified: ${d.proof_verified}`;
+                document.getElementById('reset-tok').value=d.reset_token;
+                document.getElementById('step3').classList.remove('hidden');
+                document.getElementById('s2').className='step completed';
+                document.getElementById('s3').className='step active';
+            } else { r.className='status-box status-error'; r.textContent=`❌ ${d.detail}`; }
+        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+    }
+
+    async function resetPass() {
+        const np = document.getElementById('new-pass').value;
+        const cp = document.getElementById('conf-pass').value;
+        const tok = document.getElementById('reset-tok').value;
+        const r = document.getElementById('r3');
+        if (!np || !cp) { r.className='status-box status-error'; r.textContent='Fill both fields'; return; }
+        if (np !== cp) { r.className='status-box status-error'; r.textContent='Passwords don\'t match'; return; }
+        try {
+            const res = await fetch('/api/reset-password', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({email, new_password:np, reset_token:tok})
+            });
+            const d = await res.json();
+            if (res.ok) {
+                r.className='status-box status-success'; r.textContent='✅ Processing...';
+                document.getElementById('step4').classList.remove('hidden');
+                document.getElementById('r4').innerHTML=`
+                    <div class="status-box status-success"><strong>✅ Password Reset Complete!</strong></div>
+                    <div class="state-display">
+                        <div class="state-item"><div class="label">Old Reset Counter</div><div class="value danger">${d.old_reset_counter}</div></div>
+                        <div class="state-item"><div class="label">New Reset Counter</div><div class="value success">${d.new_reset_counter}</div></div>
+                        <div class="state-item"><div class="label">Old Session Version</div><div class="value danger">${d.old_session_version}</div></div>
+                        <div class="state-item"><div class="label">New Session Version</div><div class="value success">${d.new_session_version}</div></div>
+                    </div>
+                    <h3>Old Proof (INVALID):</h3>
+                    <div class="proof-display" style="border-left-color:#ff6b6b;color:#ff6b6b;">❌ ${d.old_proof}</div>
+                    <h3>New Proof (current):</h3>
+                    <div class="proof-display" style="border-left-color:#51cf66;color:#51cf66;">✅ ${d.new_proof}</div>
+                    <div class="status-box status-warning" style="margin-top:15px;">
+                        ⚠️ All sessions with version=${d.old_session_version} are now invalid.<br>
+                        Try: Dashboard (old session rejected) | Replay Test (old proof blocked) | Login with new password
+                    </div>`;
+                document.getElementById('s3').className='step completed';
+                document.getElementById('s4').className='step completed';
+                localStorage.removeItem('jwt_token');
+            } else { r.className='status-box status-error'; r.textContent=`❌ ${d.detail}`; }
+        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+    }
+
+    async function testReplay() {
+        const em = document.getElementById('rep-email').value.trim();
+        const pr = document.getElementById('rep-proof').value.trim();
+        const r = document.getElementById('rep-result');
+        if (!em || !pr) { r.className='status-box status-error'; r.textContent='Fill both fields'; return; }
+        try {
+            const res = await fetch('/api/test-replay', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({email:em, old_proof:pr})
+            });
+            const d = await res.json();
+            if (d.replay_blocked) {
+                r.className='status-box status-error';
+                r.textContent=`🛡️ REPLAY ATTACK BLOCKED!\n\n${d.message}\n\nSubmitted: ${d.submitted_proof}\nExpected: ${d.expected_proof}\nReset Counter: ${d.current_reset_counter}\nReason: ${d.reason}`;
+            } else {
+                r.className='status-box status-warning';
+                r.textContent=`⚠️ ${d.message}\nReset counter: ${d.current_reset_counter}\nReset password first, then try again.`;
+            }
+        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+    }
+    </script>
+</body>
+</html>
