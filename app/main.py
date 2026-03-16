@@ -24,8 +24,12 @@ app.include_router(router)
 @app.on_event("startup")
 def startup():
     init_db()
+    # Initialize CSV files
+    from app.routes import init_csv_files
+    init_csv_files()
     print("=" * 50)
     print("  ZKP Auth Framework - Server Running")
+    print("  CSV files initialized")
     print("=" * 50)
 
 
