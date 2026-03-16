@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - ZKP Auth</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <nav class="navbar">
+        <a href="/" class="logo">ZKP<span>Auth</span></a>
+        <ul class="nav-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/register">Register</a></li>
+            <li><a href="/dashboard">Dashboard</a></li>
+            <li><a href="/reset">Reset</a></li>
+            <li><a href="/logs">Logs</a></li>
+        </ul>
+    </nav>
+    <div class="container">
+        <div class="card">
+            <h2>🔑 User Login</h2>
+            <p style="color:#aaa;margin-bottom:20px;">JWT token will include session_version for session invalidation tracking.</p>
+            <div class="form-group">
+                <label>Username</label>
+                <input type="text" id="login-username" placeholder="Enter username">
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="login-password" placeholder="Enter password">
+            </div>
+            <button class="btn btn-primary" onclick="login()">Login</button>
+            <button class="btn btn-success" onclick="location.href='/dashboard'" style="margin-left:10px;">Dashboard</button>
+            <div id="login-result" class="hidden"></div>
+        </div>
+        <div id="token-section" class="card hidden">
+            <h2>🎫 Session Token Issued</h2>
+            <div class="state-display">
+                <div class="state-item"><div class="label">Session Version</div><div class="value" id="token-sv">-</div></div>
+                <div class="state-item"><div class="label">Reset Counter</div><div class="value" id="token-rc">-</div></div>
+            </div>
+            <h3>JWT Token:</h3>
+            <div class="proof-display" id="token-display"></div>
+            <h3>Current ZKP Proof:</h3>
+            <div class="proof-display" id="proof-display"></div>
+            <p style="color:#888;margin-top:10px;font-size:0.9em;">💡 Copy this proof. After password reset, paste it in the Replay Attack Test to see it rejected.</p>
+        </div>
+    </div>
+    <script>
+    async function login() {
+        const username = document.getElementById('login-username').value.trim();
+        const password = document.getElementById('login-password').value;
+        const r = document.getElementById('login-result');
+        if (!username || !password) { r.className='status-box status-error'; r.textContent='Fill all fields'; return; }
+        try {
+            const res = await fetch('/api/login', {
+                method:'POST', headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({username, password})
+            });
+            const data = await res.json();
+            if (res.ok) {
+                localStorage.setItem('jwt_token', data.token);
+                localStorage.setItem('username', data.username);
+                r.className='status-box status-success';
+                r.textContent=`✅ Login Successful!\nWelcome, ${data.username}!\nReset Counter: ${data.reset_counter}\nSession Version: ${data.session_version}`;
+                document.getElementById('token-section').classList.remove('hidden');
+                document.getElementById('token-sv').textContent=data.session_version;
+                document.getElementById('token-rc').textContent=data.reset_counter;
+                document.getElementById('token-display').textContent=data.token;
+                document.getElementById('proof-display').textContent=data.current_proof;
+                localStorage.setItem('current_proof', data.current_proof);
+            } else {
+                r.className='status-box status-error';
+                r.textContent=`❌ ${data.detail}`;
+            }
+        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+    }
+    </script>
+</body>
+</html>
