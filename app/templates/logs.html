@@ -18,12 +18,32 @@
         </ul>
     </nav>
     <div class="container">
+
+        <!-- User Count & List -->
+        <div class="card">
+            <h2>👥 Registered Users</h2>
+            <button class="btn btn-primary" onclick="loadUsers()">Load All Users</button>
+            <div id="user-count" style="margin-top:15px;"></div>
+            <div id="user-list" style="margin-top:10px;"></div>
+        </div>
+
+        <!-- Download CSV -->
+        <div class="card">
+            <h2>📥 Download Data (CSV)</h2>
+            <p style="color:#aaa;margin-bottom:15px;">Download all records as CSV files. These contain user details, security logs, and token history.</p>
+            <a href="/api/download/users-csv" class="btn btn-success" style="margin-right:10px;text-decoration:none;">⬇ Users CSV</a>
+            <a href="/api/download/logs-csv" class="btn btn-warning" style="margin-right:10px;text-decoration:none;">⬇ Security Logs CSV</a>
+            <a href="/api/download/tokens-csv" class="btn btn-primary" style="text-decoration:none;">⬇ Tokens CSV</a>
+        </div>
+
+        <!-- Security Logs -->
         <div class="card">
             <h2>📋 Security Event Logs</h2>
-            <p style="color:#aaa;margin-bottom:15px;">Audit trail: registrations, logins, resets, proof verifications, replay attempts, session revocations.</p>
             <button class="btn btn-primary" onclick="loadLogs()">Load All Logs</button>
             <button class="btn btn-warning" onclick="toggleRefresh()" style="margin-left:10px;" id="ref-btn">Auto Refresh: OFF</button>
         </div>
+
+        <!-- User State Lookup -->
         <div class="card">
             <h2>🔍 User State Lookup</h2>
             <div class="form-group">
@@ -33,13 +53,63 @@
             <button class="btn btn-primary" onclick="lookupUser()">Look Up</button>
             <div id="lu-result" class="hidden"></div>
         </div>
+
+        <!-- Log Timeline -->
         <div class="card">
             <h2>📜 Event Timeline</h2>
             <div id="logs-box"><p style="color:#666;">Click "Load All Logs" to view events.</p></div>
         </div>
     </div>
+
     <script>
     let refInt = null;
+
+    async function loadUsers() {
+        try {
+            const res = await fetch('/api/all-users');
+            const d = await res.json();
+
+            document.getElementById('user-count').innerHTML =
+                `<div class="state-display">
+                    <div class="state-item">
+                        <div class="label">Total Registered Users</div>
+                        <div class="value success">${d.total_users}</div>
+                    </div>
+                </div>`;
+
+            if (d.users.length === 0) {
+                document.getElementById('user-list').innerHTML =
+                    '<p style="color:#666;">No users registered yet.</p>';
+                return;
+            }
+
+            let html = '<table style="width:100%;border-collapse:collapse;margin-top:10px;">';
+            html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.2);">';
+            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">ID</th>';
+            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">Username</th>';
+            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">Email</th>';
+            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">Reset Counter</th>';
+            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">Session Ver</th>';
+            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">Created</th>';
+            html += '</tr>';
+
+            d.users.forEach(u => {
+                html += `<tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
+                    <td style="padding:8px;color:#aaa;">${u.user_id}</td>
+                    <td style="padding:8px;color:#fff;">${u.username}</td>
+                    <td style="padding:8px;color:#aaa;">${u.email}</td>
+                    <td style="padding:8px;color:#ffd93d;">${u.reset_counter}</td>
+                    <td style="padding:8px;color:#51cf66;">${u.session_version}</td>
+                    <td style="padding:8px;color:#666;font-size:0.85em;">${u.created_at}</td>
+                </tr>`;
+            });
+            html += '</table>';
+            document.getElementById('user-list').innerHTML = html;
+        } catch(e) {
+            document.getElementById('user-count').innerHTML =
+                `<p style="color:#ff6b6b;">Error: ${e.message}</p>`;
+        }
+    }
 
     async function loadLogs() {
         const c = document.getElementById('logs-box');
@@ -78,6 +148,9 @@
         if (refInt) { clearInterval(refInt); refInt=null; btn.textContent='Auto Refresh: OFF'; btn.className='btn btn-warning'; }
         else { loadLogs(); refInt=setInterval(loadLogs,3000); btn.textContent='Auto Refresh: ON'; btn.className='btn btn-success'; }
     }
+
+    // Auto-load on page open
+    window.onload = function() { loadUsers(); loadLogs(); };
     </script>
 </body>
 </html>
