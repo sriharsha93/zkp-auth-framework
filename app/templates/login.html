@@ -20,19 +20,27 @@
     <div class="container">
         <div class="card">
             <h2>🔑 User Login</h2>
-            <p style="color:#aaa;margin-bottom:20px;">JWT token will include session_version for session invalidation tracking.</p>
+            <p style="color:#aaa;margin-bottom:10px;">JWT token includes session_version for session invalidation.</p>
+
+            <div class="status-box status-warning" style="margin-bottom:15px;">
+                ⚠️ <strong>Security:</strong> Account locks for 1 hour after 3 failed login attempts.
+            </div>
+
             <div class="form-group">
                 <label>Username</label>
                 <input type="text" id="login-username" placeholder="Enter username">
             </div>
             <div class="form-group">
                 <label>Password</label>
-                <input type="password" id="login-password" placeholder="Enter password">
+                <input type="password" id="login-password" placeholder="Enter password" onkeypress="if(event.key==='Enter')login()">
             </div>
-            <button class="btn btn-primary" onclick="login()">Login</button>
+
+            <button class="btn btn-primary" onclick="login()" id="login-btn">Login</button>
             <button class="btn btn-success" onclick="location.href='/dashboard'" style="margin-left:10px;">Dashboard</button>
+
             <div id="login-result" class="hidden"></div>
         </div>
+
         <div id="token-section" class="card hidden">
             <h2>🎫 Session Token Issued</h2>
             <div class="state-display">
@@ -43,37 +51,55 @@
             <div class="proof-display" id="token-display"></div>
             <h3>Current ZKP Proof:</h3>
             <div class="proof-display" id="proof-display"></div>
-            <p style="color:#888;margin-top:10px;font-size:0.9em;">💡 Copy this proof. After password reset, paste it in the Replay Attack Test to see it rejected.</p>
+            <p style="color:#888;margin-top:10px;font-size:0.9em;">💡 Copy this proof. After password reset, paste it in Replay Attack Test to see it rejected.</p>
         </div>
     </div>
+
     <script>
     async function login() {
         const username = document.getElementById('login-username').value.trim();
         const password = document.getElementById('login-password').value;
         const r = document.getElementById('login-result');
+        const btn = document.getElementById('login-btn');
+
         if (!username || !password) { r.className='status-box status-error'; r.textContent='Fill all fields'; return; }
+
+        btn.disabled = true;
+        btn.textContent = 'Logging in...';
+
         try {
             const res = await fetch('/api/login', {
-                method:'POST', headers:{'Content-Type':'application/json'},
+                method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({username, password})
             });
             const data = await res.json();
+
             if (res.ok) {
                 localStorage.setItem('jwt_token', data.token);
                 localStorage.setItem('username', data.username);
-                r.className='status-box status-success';
-                r.textContent=`✅ Login Successful!\nWelcome, ${data.username}!\nReset Counter: ${data.reset_counter}\nSession Version: ${data.session_version}`;
+                r.className = 'status-box status-success';
+                r.textContent = `✅ Login Successful!\nWelcome, ${data.username}!\nReset Counter: ${data.reset_counter}\nSession Version: ${data.session_version}`;
                 document.getElementById('token-section').classList.remove('hidden');
-                document.getElementById('token-sv').textContent=data.session_version;
-                document.getElementById('token-rc').textContent=data.reset_counter;
-                document.getElementById('token-display').textContent=data.token;
-                document.getElementById('proof-display').textContent=data.current_proof;
+                document.getElementById('token-sv').textContent = data.session_version;
+                document.getElementById('token-rc').textContent = data.reset_counter;
+                document.getElementById('token-display').textContent = data.token;
+                document.getElementById('proof-display').textContent = data.current_proof;
                 localStorage.setItem('current_proof', data.current_proof);
+            } else if (res.status === 423) {
+                // Account locked
+                r.className = 'status-box status-error';
+                r.textContent = `🔒 ${data.detail}`;
             } else {
-                r.className='status-box status-error';
-                r.textContent=`❌ ${data.detail}`;
+                r.className = 'status-box status-error';
+                r.textContent = `❌ ${data.detail}`;
             }
-        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+        } catch(e) {
+            r.className = 'status-box status-error';
+            r.textContent = `❌ ${e.message}`;
+        }
+
+        btn.disabled = false;
+        btn.textContent = 'Login';
     }
     </script>
 </body>
