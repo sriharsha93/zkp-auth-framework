@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 import csv
 import os
+import re
 
 from app.database import get_db
 from app.models import User, OTPStore, SecurityLog
@@ -25,13 +26,43 @@ USERS_CSV = os.path.join(DATA_DIR, "users.csv")
 LOGS_CSV = os.path.join(DATA_DIR, "security_logs.csv")
 TOKENS_CSV = os.path.join(DATA_DIR, "tokens.csv")
 
+# Lockout settings
+MAX_LOGIN_ATTEMPTS = 3
+LOGIN_LOCKOUT_MINUTES = 60
+MAX_OTP_ATTEMPTS = 3
+OTP_LOCKOUT_MINUTES = 60
+
+
+# ============================================================
+# PASSWORD VALIDATION
+# ============================================================
+
+def validate_password(password: str) -> dict:
+    """
+    Validate password meets all requirements.
+    Returns {"valid": True/False, "errors": [list of errors]}
+    """
+    errors = []
+
+    if len(password) < 8:
+        errors.append("Password must be at least 8 characters long")
+    if not re.search(r'[A-Z]', password):
+        errors.append("Password must contain at least 1 uppercase letter (A-Z)")
+    if not re.search(r'[a-z]', password):
+        errors.append("Password must contain at least 1 lowercase letter (a-z)")
+    if not re.search(r'[0-9]', password):
+        errors.append("Password must contain at least 1 number (0-9)")
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]', password):
+        errors.append("Password must contain at least 1 special character (!@#$%^&*...)")
+
+    return {"valid": len(errors) == 0, "errors": errors}
+
 
 # ============================================================
 # CSV HELPER FUNCTIONS
 # ============================================================
 
 def init_csv_files():
-    """Create CSV files with headers if they don't exist."""
     if not os.path.exists(USERS_CSV):
         with open(USERS_CSV, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -39,14 +70,12 @@ def init_csv_files():
                 'user_id', 'username', 'email', 'reset_counter',
                 'session_version', 'registered_at'
             ])
-
     if not os.path.exists(LOGS_CSV):
         with open(LOGS_CSV, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow([
                 'log_id', 'user_id', 'event_type', 'details', 'timestamp'
             ])
-
     if not os.path.exists(TOKENS_CSV):
         with open(TOKENS_CSV, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -57,7 +86,6 @@ def init_csv_files():
 
 
 def append_user_csv(user_id, username, email, reset_counter, session_version):
-    """Add a user record to CSV."""
     init_csv_files()
     with open(USERS_CSV, 'a', newline='') as f:
         writer = csv.writer(f)
@@ -68,7 +96,6 @@ def append_user_csv(user_id, username, email, reset_counter, session_version):
 
 
 def append_log_csv(log_id, user_id, event_type, details):
-    """Add a security log to CSV."""
     init_csv_files()
     with open(LOGS_CSV, 'a', newline='') as f:
         writer = csv.writer(f)
@@ -79,7 +106,6 @@ def append_log_csv(log_id, user_id, event_type, details):
 
 
 def append_token_csv(user_id, username, token, session_version, status="ACTIVE"):
-    """Add a token record to CSV."""
     init_csv_files()
     with open(TOKENS_CSV, 'a', newline='') as f:
         writer = csv.writer(f)
@@ -90,7 +116,6 @@ def append_token_csv(user_id, username, token, session_version, status="ACTIVE")
 
 
 def update_user_csv_after_reset(user_id, username, email, new_rc, new_sv):
-    """Add updated user state to CSV after password reset."""
     init_csv_files()
     with open(USERS_CSV, 'a', newline='') as f:
         writer = csv.writer(f)
@@ -101,12 +126,10 @@ def update_user_csv_after_reset(user_id, username, email, new_rc, new_sv):
 
 
 def get_user_count_from_db(db: Session) -> int:
-    """Get total registered users from database."""
     return db.query(User).count()
 
 
 def get_all_users_from_db(db: Session) -> list:
-    """Get all users from database."""
     users = db.query(User).all()
     return [
         {
@@ -115,10 +138,61 @@ def get_all_users_from_db(db: Session) -> list:
             "email": u.email,
             "reset_counter": u.reset_counter,
             "session_version": u.session_version,
+            "failed_login_attempts": u.failed_login_attempts,
+            "failed_otp_attempts": u.failed_otp_attempts,
+            "login_locked_until": str(u.login_locked_until) if u.login_locked_until else None,
+            "otp_locked_until": str(u.otp_locked_until) if u.otp_locked_until else None,
             "created_at": str(u.created_at)
         }
         for u in users
     ]
+
+
+# ============================================================
+# LOCKOUT CHECK HELPERS
+# ============================================================
+
+def check_login_lockout(user: User) -> dict:
+    """Check if user is locked out from login attempts."""
+    if user.login_locked_until:
+        lock_time = user.login_locked_until
+        if lock_time.tzinfo is None:
+            lock_time = lock_time.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        if now < lock_time:
+            remaining = int((lock_time - now).total_seconds() / 60)
+            return {
+                "locked": True,
+                "minutes_remaining": remaining + 1,
+                "message": f"Account locked due to {MAX_LOGIN_ATTEMPTS} failed login attempts. "
+                           f"Try again in {remaining + 1} minutes."
+            }
+        else:
+            # Lockout expired, reset counter
+            user.failed_login_attempts = 0
+            user.login_locked_until = None
+    return {"locked": False}
+
+
+def check_otp_lockout(user: User) -> dict:
+    """Check if user is locked out from OTP attempts."""
+    if user.otp_locked_until:
+        lock_time = user.otp_locked_until
+        if lock_time.tzinfo is None:
+            lock_time = lock_time.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        if now < lock_time:
+            remaining = int((lock_time - now).total_seconds() / 60)
+            return {
+                "locked": True,
+                "minutes_remaining": remaining + 1,
+                "message": f"Password reset locked due to {MAX_OTP_ATTEMPTS} failed OTP attempts. "
+                           f"Try again in {remaining + 1} minutes."
+            }
+        else:
+            user.failed_otp_attempts = 0
+            user.otp_locked_until = None
+    return {"locked": False}
 
 
 # ============================================================
@@ -157,13 +231,20 @@ def log_event(db: Session, user_id: int, event_type: str, details: str):
     db.add(entry)
     db.commit()
     db.refresh(entry)
-    # Also save to CSV
     append_log_csv(entry.id, user_id, event_type, details)
 
 
 # ============================================================
 # API ENDPOINTS
 # ============================================================
+
+# PASSWORD VALIDATION ENDPOINT (for real-time UI checking)
+@router.post("/api/validate-password")
+def validate_password_endpoint(data: dict):
+    password = data.get("password", "")
+    result = validate_password(password)
+    return result
+
 
 # 1. REGISTER
 @router.post("/api/register")
@@ -175,23 +256,26 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Username or email already exists")
     if len(req.username) < 3:
         raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
-    if len(req.password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    # Validate password
+    pwd_check = validate_password(req.password)
+    if not pwd_check["valid"]:
+        raise HTTPException(status_code=400, detail=" | ".join(pwd_check["errors"]))
 
     new_user = User(
         username=req.username,
         email=req.email,
         password_hash=hash_password(req.password),
         reset_counter=0,
-        session_version=1
+        session_version=1,
+        failed_login_attempts=0,
+        failed_otp_attempts=0
     )
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
 
-    # Save to CSV
     append_user_csv(new_user.id, req.username, req.email, 0, 1)
-
     log_event(db, new_user.id, "REGISTRATION",
               f"User '{req.username}' registered. reset_counter=0, session_version=1")
 
@@ -207,22 +291,54 @@ def register(req: RegisterRequest, db: Session = Depends(get_db)):
     }
 
 
-# 2. LOGIN
+# 2. LOGIN (with lockout)
 @router.post("/api/login")
 def login(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == req.username).first()
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    # Check lockout
+    lockout = check_login_lockout(user)
+    if lockout["locked"]:
+        log_event(db, user.id, "LOGIN_BLOCKED",
+                  f"Login attempt while locked. {lockout['minutes_remaining']} min remaining")
+        db.commit()
+        raise HTTPException(status_code=423, detail=lockout["message"])
+
+    # Verify password
     if not verify_password(req.password, user.password_hash):
-        log_event(db, user.id, "LOGIN_FAILED", f"Failed login for '{req.username}'")
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        user.failed_login_attempts += 1
+        attempts_left = MAX_LOGIN_ATTEMPTS - user.failed_login_attempts
+
+        if user.failed_login_attempts >= MAX_LOGIN_ATTEMPTS:
+            user.login_locked_until = datetime.now(timezone.utc) + timedelta(minutes=LOGIN_LOCKOUT_MINUTES)
+            db.commit()
+            log_event(db, user.id, "ACCOUNT_LOCKED",
+                      f"Account locked for {LOGIN_LOCKOUT_MINUTES} min after {MAX_LOGIN_ATTEMPTS} failed attempts")
+            raise HTTPException(
+                status_code=423,
+                detail=f"Account locked! {MAX_LOGIN_ATTEMPTS} failed login attempts. "
+                       f"Try again after {LOGIN_LOCKOUT_MINUTES} minutes."
+            )
+        else:
+            db.commit()
+            log_event(db, user.id, "LOGIN_FAILED",
+                      f"Failed login attempt {user.failed_login_attempts}/{MAX_LOGIN_ATTEMPTS}")
+            raise HTTPException(
+                status_code=401,
+                detail=f"Invalid password. {attempts_left} attempt(s) remaining before lockout."
+            )
+
+    # Successful login - reset failed attempts
+    user.failed_login_attempts = 0
+    user.login_locked_until = None
+    db.commit()
 
     token = create_jwt_token(user.id, user.username, user.session_version)
     current_proof = generate_proof(user.password_hash, user.reset_counter)
 
-    # Save token to CSV
     append_token_csv(user.id, user.username, token, user.session_version, "ACTIVE")
-
     log_event(db, user.id, "LOGIN_SUCCESS",
               f"User '{req.username}' logged in. session_version={user.session_version}")
 
@@ -237,7 +353,7 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
     }
 
 
-# 3. DASHBOARD (protected)
+# 3. DASHBOARD
 @router.get("/api/dashboard")
 def dashboard(request: Request, db: Session = Depends(get_db)):
     auth = request.headers.get("Authorization")
@@ -254,7 +370,6 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="User not found")
 
     if payload["session_version"] != user.session_version:
-        # Log token rejection to CSV
         append_token_csv(user.id, user.username, token, payload["session_version"], "REJECTED")
         log_event(db, user.id, "SESSION_REJECTED",
                   f"Token version ({payload['session_version']}) != DB version ({user.session_version})")
@@ -281,6 +396,15 @@ def request_reset(req: ResetRequest, db: Session = Depends(get_db)):
     if not user:
         raise HTTPException(status_code=404, detail="Email not found")
 
+    # Check OTP lockout
+    lockout = check_otp_lockout(user)
+    if lockout["locked"]:
+        log_event(db, user.id, "RESET_BLOCKED",
+                  f"Reset attempt while locked. {lockout['minutes_remaining']} min remaining")
+        db.commit()
+        raise HTTPException(status_code=423, detail=lockout["message"])
+
+    # Invalidate old OTPs
     db.query(OTPStore).filter(
         OTPStore.user_id == user.id, OTPStore.is_used == False
     ).update({"is_used": True})
@@ -298,7 +422,8 @@ def request_reset(req: ResetRequest, db: Session = Depends(get_db)):
     current_proof = generate_proof(user.password_hash, user.reset_counter)
 
     log_event(db, user.id, "RESET_REQUESTED",
-              f"OTP generated. reset_counter={user.reset_counter}")
+              f"OTP generated. reset_counter={user.reset_counter}. "
+              f"Failed OTP attempts so far: {user.failed_otp_attempts}/{MAX_OTP_ATTEMPTS}")
 
     return {
         "message": "OTP generated successfully",
@@ -306,16 +431,24 @@ def request_reset(req: ResetRequest, db: Session = Depends(get_db)):
         "expires_in_seconds": 120,
         "current_proof": current_proof,
         "reset_counter": user.reset_counter,
+        "otp_attempts_used": user.failed_otp_attempts,
+        "otp_attempts_max": MAX_OTP_ATTEMPTS,
         "note": "In production, OTP would be sent via email/SMS. Displayed here for demo."
     }
 
 
-# 5. VERIFY OTP + PROOF
+# 5. VERIFY OTP + PROOF (with lockout)
 @router.post("/api/verify-otp")
 def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+
+    # Check OTP lockout
+    lockout = check_otp_lockout(user)
+    if lockout["locked"]:
+        db.commit()
+        raise HTTPException(status_code=423, detail=lockout["message"])
 
     otp_entry = db.query(OTPStore).filter(
         OTPStore.user_id == user.id, OTPStore.is_used == False
@@ -324,6 +457,7 @@ def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
     if not otp_entry:
         raise HTTPException(status_code=400, detail="No valid OTP found. Request a new one.")
 
+    # Check expiry
     now = datetime.now(timezone.utc)
     expires = otp_entry.expires_at
     if expires.tzinfo is None:
@@ -334,16 +468,45 @@ def verify_otp(req: VerifyOTPRequest, db: Session = Depends(get_db)):
         log_event(db, user.id, "OTP_EXPIRED", "OTP expired")
         raise HTTPException(status_code=400, detail="OTP expired. Request a new one.")
 
+    # Check OTP code
     if otp_entry.otp_code != req.otp:
-        log_event(db, user.id, "OTP_INVALID", "Wrong OTP entered")
-        raise HTTPException(status_code=400, detail="Invalid OTP code")
+        user.failed_otp_attempts += 1
+        attempts_left = MAX_OTP_ATTEMPTS - user.failed_otp_attempts
 
+        if user.failed_otp_attempts >= MAX_OTP_ATTEMPTS:
+            user.otp_locked_until = datetime.now(timezone.utc) + timedelta(minutes=OTP_LOCKOUT_MINUTES)
+            otp_entry.is_used = True  # Invalidate the OTP
+            db.commit()
+            log_event(db, user.id, "OTP_LOCKED",
+                      f"Password reset locked for {OTP_LOCKOUT_MINUTES} min after "
+                      f"{MAX_OTP_ATTEMPTS} failed OTP attempts")
+            raise HTTPException(
+                status_code=423,
+                detail=f"Password reset locked! {MAX_OTP_ATTEMPTS} failed OTP attempts. "
+                       f"Try again after {OTP_LOCKOUT_MINUTES} minutes."
+            )
+        else:
+            db.commit()
+            log_event(db, user.id, "OTP_INVALID",
+                      f"Wrong OTP. Attempt {user.failed_otp_attempts}/{MAX_OTP_ATTEMPTS}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid OTP code. {attempts_left} attempt(s) remaining before lockout."
+            )
+
+    # VERIFY ZKP PROOF
     if not verify_proof(req.proof, user.password_hash, user.reset_counter):
         log_event(db, user.id, "PROOF_FAILED",
                   f"ZKP proof failed for reset_counter={user.reset_counter}")
-        raise HTTPException(status_code=400, detail="Proof verification failed")
+        raise HTTPException(
+            status_code=400,
+            detail="Proof verification failed. The cryptographic proof does not match the current state."
+        )
 
+    # SUCCESS - reset OTP attempt counter
     otp_entry.is_used = True
+    user.failed_otp_attempts = 0
+    user.otp_locked_until = None
     db.commit()
 
     reset_token = create_jwt_token(user.id, user.username, user.session_version)
@@ -369,8 +532,11 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == req.email).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if len(req.new_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+
+    # Validate new password
+    pwd_check = validate_password(req.new_password)
+    if not pwd_check["valid"]:
+        raise HTTPException(status_code=400, detail=" | ".join(pwd_check["errors"]))
 
     old_rc = user.reset_counter
     old_sv = user.session_version
@@ -384,13 +550,10 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)):
 
     new_proof = generate_proof(user.password_hash, user.reset_counter)
 
-    # Update CSV with new state
     update_user_csv_after_reset(user.id, user.username, user.email,
                                  user.reset_counter, user.session_version)
-
-    # Mark old tokens as revoked in CSV
     append_token_csv(user.id, user.username, "ALL_OLD_TOKENS",
-                     old_sv, f"REVOKED_AT_RESET")
+                     old_sv, "REVOKED_AT_RESET")
 
     log_event(db, user.id, "PASSWORD_RESET_COMPLETE",
               f"reset_counter: {old_rc}->{user.reset_counter}, "
@@ -469,12 +632,16 @@ def get_user_state(username: str, db: Session = Depends(get_db)):
         "email": user.email,
         "reset_counter": user.reset_counter,
         "session_version": user.session_version,
+        "failed_login_attempts": user.failed_login_attempts,
+        "failed_otp_attempts": user.failed_otp_attempts,
+        "login_locked_until": str(user.login_locked_until) if user.login_locked_until else None,
+        "otp_locked_until": str(user.otp_locked_until) if user.otp_locked_until else None,
         "current_proof": proof,
         "created_at": str(user.created_at)
     }
 
 
-# 10. GET ALL USERS (with count)
+# 10. ALL USERS
 @router.get("/api/all-users")
 def get_all_users(db: Session = Depends(get_db)):
     users = get_all_users_from_db(db)
@@ -484,38 +651,24 @@ def get_all_users(db: Session = Depends(get_db)):
     }
 
 
-# 11. DOWNLOAD CSV FILES
+# 11. DOWNLOAD CSV
 @router.get("/api/download/users-csv")
 def download_users_csv():
     init_csv_files()
     if not os.path.exists(USERS_CSV):
         raise HTTPException(status_code=404, detail="No user data yet")
-    return FileResponse(
-        USERS_CSV,
-        media_type="text/csv",
-        filename="users_data.csv"
-    )
-
+    return FileResponse(USERS_CSV, media_type="text/csv", filename="users_data.csv")
 
 @router.get("/api/download/logs-csv")
 def download_logs_csv():
     init_csv_files()
     if not os.path.exists(LOGS_CSV):
         raise HTTPException(status_code=404, detail="No log data yet")
-    return FileResponse(
-        LOGS_CSV,
-        media_type="text/csv",
-        filename="security_logs.csv"
-    )
-
+    return FileResponse(LOGS_CSV, media_type="text/csv", filename="security_logs.csv")
 
 @router.get("/api/download/tokens-csv")
 def download_tokens_csv():
     init_csv_files()
     if not os.path.exists(TOKENS_CSV):
         raise HTTPException(status_code=404, detail="No token data yet")
-    return FileResponse(
-        TOKENS_CSV,
-        media_type="text/csv",
-        filename="tokens_data.csv"
-    )
+    return FileResponse(TOKENS_CSV, media_type="text/csv", filename="tokens_data.csv")
