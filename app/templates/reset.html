@@ -5,6 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Password Reset - ZKP Auth</title>
     <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .pwd-rules { margin: 10px 0; padding: 15px; background: rgba(0,0,0,0.3); border-radius: 8px; }
+        .pwd-rule { padding: 4px 0; font-size: 0.9em; display: flex; align-items: center; gap: 8px; }
+        .pwd-rule .icon { font-size: 1.1em; width: 20px; text-align: center; }
+        .pwd-rule.pass { color: #51cf66; }
+        .pwd-rule.fail { color: #ff6b6b; }
+        .pwd-rule.neutral { color: #888; }
+        .editable-proof { width:100%; padding:12px 15px; background:rgba(0,0,0,0.4); border:1px solid rgba(255,217,61,0.4);
+            border-radius:6px; font-family:'Courier New',monospace; font-size:0.85em; color:#ffd93d;
+            word-break:break-all; resize:none; min-height:60px; }
+        .editable-proof:focus { outline:none; border-color:#00d4ff; box-shadow:0 0 10px rgba(0,212,255,0.2); }
+        .attempt-counter { display:inline-block; padding:5px 12px; border-radius:20px; font-size:0.85em; font-weight:bold; margin-left:10px; }
+        .attempts-ok { background:rgba(81,207,102,0.2); color:#51cf66; border:1px solid rgba(81,207,102,0.3); }
+        .attempts-warn { background:rgba(255,217,61,0.2); color:#ffd93d; border:1px solid rgba(255,217,61,0.3); }
+        .attempts-danger { background:rgba(255,107,107,0.2); color:#ff6b6b; border:1px solid rgba(255,107,107,0.3); }
+    </style>
 </head>
 <body>
     <nav class="navbar">
@@ -22,7 +38,13 @@
         <!-- Progress -->
         <div class="card" style="text-align:center;">
             <h2>🔒 Secure Password Reset</h2>
-            <p style="color:#aaa;margin-bottom:15px;">Requires OTP + ZKP-style cryptographic proof verification.</p>
+            <p style="color:#aaa;margin-bottom:10px;">Requires OTP + ZKP-style cryptographic proof verification.</p>
+            <div class="status-box status-warning" style="text-align:left;">
+                ⚠️ <strong>Security Rules:</strong><br>
+                • OTP has maximum <strong>3 attempts</strong> — after that, reset is locked for <strong>1 hour</strong><br>
+                • OTP expires after <strong>120 seconds</strong><br>
+                • Proof must match current lifecycle state
+            </div>
             <div class="steps">
                 <div class="step active" id="s1">1</div>
                 <div class="step" id="s2">2</div>
@@ -45,18 +67,25 @@
 
         <!-- Step 2 -->
         <div id="step2" class="card hidden">
-            <h2>Step 2: Verify OTP & ZKP Proof</h2>
+            <h2>Step 2: Verify OTP & ZKP Proof
+                <span class="attempt-counter attempts-ok" id="otp-attempts-badge">Attempts: 0/3</span>
+            </h2>
             <div class="status-box status-info">
                 <strong>🔑 ZKP Proof:</strong> proof = HMAC-SHA256(password_hash, reset_counter)<br>
-                Server recomputes independently. Password never sent.
+                Server recomputes independently. Password never sent.<br><br>
+                <strong>📝 You can EDIT the proof below</strong> to test what happens with a wrong proof.
             </div>
             <div class="form-group">
                 <label>OTP Code</label>
                 <input type="text" id="otp-code" placeholder="6-digit OTP" maxlength="6">
             </div>
-            <h3>Current Proof (auto-filled):</h3>
-            <div class="proof-display" id="proof-show">Waiting...</div>
-            <input type="hidden" id="proof-val">
+
+            <h3>Proof (auto-filled — editable for testing):</h3>
+            <textarea class="editable-proof" id="proof-val" rows="3" placeholder="Proof will appear here..."></textarea>
+            <p style="color:#ff922b;font-size:0.85em;margin-top:5px;">
+                ⚡ Try changing some characters in the proof above to see the verification fail!
+            </p>
+
             <br>
             <button class="btn btn-primary" onclick="verifyOTP()">Verify OTP & Proof</button>
             <div id="r2" class="hidden"></div>
@@ -70,11 +99,19 @@
             </div>
             <div class="form-group">
                 <label>New Password</label>
-                <input type="password" id="new-pass" placeholder="Min 6 characters">
+                <input type="password" id="new-pass" placeholder="Min 8 chars, upper+lower+number+special" oninput="checkNewPwd()">
+            </div>
+            <!-- Password rules for new password -->
+            <div class="pwd-rules" id="new-pwd-rules">
+                <div class="pwd-rule neutral" id="nr-length"><span class="icon">○</span> At least 8 characters</div>
+                <div class="pwd-rule neutral" id="nr-upper"><span class="icon">○</span> At least 1 uppercase (A-Z)</div>
+                <div class="pwd-rule neutral" id="nr-lower"><span class="icon">○</span> At least 1 lowercase (a-z)</div>
+                <div class="pwd-rule neutral" id="nr-number"><span class="icon">○</span> At least 1 number (0-9)</div>
+                <div class="pwd-rule neutral" id="nr-special"><span class="icon">○</span> At least 1 special char (!@#$%...)</div>
             </div>
             <div class="form-group">
                 <label>Confirm Password</label>
-                <input type="password" id="conf-pass" placeholder="Confirm">
+                <input type="password" id="conf-pass" placeholder="Confirm new password">
             </div>
             <input type="hidden" id="reset-tok">
             <button class="btn btn-primary" onclick="resetPass()">Reset Password</button>
@@ -106,6 +143,7 @@
 
     <script>
     let email = '';
+    let otpAttemptsUsed = 0;
 
     async function requestReset() {
         email = document.getElementById('reset-email').value.trim();
@@ -118,24 +156,41 @@
             });
             const d = await res.json();
             if (res.ok) {
+                otpAttemptsUsed = d.otp_attempts_used || 0;
+                updateAttemptBadge();
                 r.className='status-box status-success';
-                r.textContent=`✅ OTP: ${d.otp}\nExpires in: ${d.expires_in_seconds}s\nReset Counter: ${d.reset_counter}\n\n${d.note}`;
+                r.textContent=`✅ OTP: ${d.otp}\nExpires in: ${d.expires_in_seconds}s\nReset Counter: ${d.reset_counter}\nOTP Attempts Used: ${otpAttemptsUsed}/3\n\n${d.note}`;
                 document.getElementById('step2').classList.remove('hidden');
-                document.getElementById('proof-show').textContent=d.current_proof;
-                document.getElementById('proof-val').value=d.current_proof;
+                document.getElementById('proof-val').value = d.current_proof;
                 document.getElementById('s1').className='step completed';
                 document.getElementById('s2').className='step active';
-                document.getElementById('rep-email').value=email;
-                document.getElementById('rep-proof').value=d.current_proof;
-            } else { r.className='status-box status-error'; r.textContent=`❌ ${d.detail}`; }
+                document.getElementById('rep-email').value = email;
+                document.getElementById('rep-proof').value = d.current_proof;
+            } else if (res.status === 423) {
+                r.className='status-box status-error';
+                r.textContent=`🔒 ${d.detail}`;
+            } else {
+                r.className='status-box status-error';
+                r.textContent=`❌ ${d.detail}`;
+            }
         } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+    }
+
+    function updateAttemptBadge() {
+        const badge = document.getElementById('otp-attempts-badge');
+        badge.textContent = `Attempts: ${otpAttemptsUsed}/3`;
+        if (otpAttemptsUsed === 0) { badge.className = 'attempt-counter attempts-ok'; }
+        else if (otpAttemptsUsed === 1) { badge.className = 'attempt-counter attempts-ok'; }
+        else if (otpAttemptsUsed === 2) { badge.className = 'attempt-counter attempts-warn'; }
+        else { badge.className = 'attempt-counter attempts-danger'; }
     }
 
     async function verifyOTP() {
         const otp = document.getElementById('otp-code').value.trim();
-        const proof = document.getElementById('proof-val').value;
+        const proof = document.getElementById('proof-val').value.trim();
         const r = document.getElementById('r2');
         if (!otp) { r.className='status-box status-error'; r.textContent='Enter OTP'; return; }
+        if (!proof) { r.className='status-box status-error'; r.textContent='Proof is empty'; return; }
         try {
             const res = await fetch('/api/verify-otp', {
                 method:'POST', headers:{'Content-Type':'application/json'},
@@ -144,13 +199,43 @@
             const d = await res.json();
             if (res.ok) {
                 r.className='status-box status-success';
-                r.textContent=`✅ OTP Verified: ${d.otp_verified}\nProof Verified: ${d.proof_verified}`;
-                document.getElementById('reset-tok').value=d.reset_token;
+                r.textContent=`✅ OTP Verified: ${d.otp_verified}\nProof Verified: ${d.proof_verified}\n\nBoth verifications passed!`;
+                document.getElementById('reset-tok').value = d.reset_token;
                 document.getElementById('step3').classList.remove('hidden');
                 document.getElementById('s2').className='step completed';
                 document.getElementById('s3').className='step active';
-            } else { r.className='status-box status-error'; r.textContent=`❌ ${d.detail}`; }
+            } else if (res.status === 423) {
+                r.className='status-box status-error';
+                r.textContent=`🔒 LOCKED!\n\n${d.detail}`;
+                otpAttemptsUsed = 3;
+                updateAttemptBadge();
+            } else {
+                // Check if it was OTP failure (increment counter)
+                if (d.detail && d.detail.includes('attempt')) {
+                    otpAttemptsUsed++;
+                    updateAttemptBadge();
+                }
+                r.className='status-box status-error';
+                r.textContent=`❌ ${d.detail}`;
+            }
         } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
+    }
+
+    // New password validation
+    function checkNewPwd() {
+        const pwd = document.getElementById('new-pass').value;
+        updatePwdRule('nr-length', pwd.length >= 8, pwd.length > 0);
+        updatePwdRule('nr-upper', /[A-Z]/.test(pwd), pwd.length > 0);
+        updatePwdRule('nr-lower', /[a-z]/.test(pwd), pwd.length > 0);
+        updatePwdRule('nr-number', /[0-9]/.test(pwd), pwd.length > 0);
+        updatePwdRule('nr-special', /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(pwd), pwd.length > 0);
+    }
+
+    function updatePwdRule(id, pass, typed) {
+        const el = document.getElementById(id);
+        if (!typed) { el.className='pwd-rule neutral'; el.querySelector('.icon').textContent='○'; return; }
+        if (pass) { el.className='pwd-rule pass'; el.querySelector('.icon').textContent='✓'; }
+        else { el.className='pwd-rule fail'; el.querySelector('.icon').textContent='✗'; }
     }
 
     async function resetPass() {
@@ -158,8 +243,18 @@
         const cp = document.getElementById('conf-pass').value;
         const tok = document.getElementById('reset-tok').value;
         const r = document.getElementById('r3');
+
         if (!np || !cp) { r.className='status-box status-error'; r.textContent='Fill both fields'; return; }
         if (np !== cp) { r.className='status-box status-error'; r.textContent='Passwords don\'t match'; return; }
+
+        // Client-side check
+        const checks = [np.length>=8, /[A-Z]/.test(np), /[a-z]/.test(np), /[0-9]/.test(np), /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(np)];
+        if (!checks.every(Boolean)) {
+            r.className='status-box status-error';
+            r.textContent='❌ New password does not meet all requirements.';
+            return;
+        }
+
         try {
             const res = await fetch('/api/reset-password', {
                 method:'POST', headers:{'Content-Type':'application/json'},
@@ -188,7 +283,9 @@
                 document.getElementById('s3').className='step completed';
                 document.getElementById('s4').className='step completed';
                 localStorage.removeItem('jwt_token');
-            } else { r.className='status-box status-error'; r.textContent=`❌ ${d.detail}`; }
+            } else {
+                r.className='status-box status-error'; r.textContent=`❌ ${d.detail}`;
+            }
         } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
     }
 
