@@ -5,6 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Register - ZKP Auth</title>
     <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .pwd-rules { margin: 10px 0; padding: 15px; background: rgba(0,0,0,0.3); border-radius: 8px; }
+        .pwd-rule { padding: 4px 0; font-size: 0.9em; display: flex; align-items: center; gap: 8px; }
+        .pwd-rule .icon { font-size: 1.1em; width: 20px; text-align: center; }
+        .pwd-rule.pass { color: #51cf66; }
+        .pwd-rule.fail { color: #ff6b6b; }
+        .pwd-rule.neutral { color: #888; }
+        .pwd-strength { margin-top: 8px; }
+        .pwd-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,0.1); overflow: hidden; }
+        .pwd-bar-fill { height: 100%; border-radius: 3px; transition: width 0.3s, background 0.3s; }
+    </style>
 </head>
 <body>
     <nav class="navbar">
@@ -19,7 +30,8 @@
     <div class="container">
         <div class="card">
             <h2>📝 User Registration</h2>
-            <p style="color:#aaa;margin-bottom:20px;">Password will be hashed with bcrypt. Lifecycle state initialized: reset_counter=0, session_version=1.</p>
+            <p style="color:#aaa;margin-bottom:20px;">Password hashed with bcrypt. Lifecycle: reset_counter=0, session_version=1.</p>
+
             <div class="form-group">
                 <label>Username</label>
                 <input type="text" id="reg-username" placeholder="Min 3 characters">
@@ -30,33 +42,117 @@
             </div>
             <div class="form-group">
                 <label>Password</label>
-                <input type="password" id="reg-password" placeholder="Min 6 characters">
+                <input type="password" id="reg-password" placeholder="Min 8 characters" oninput="checkPassword()">
             </div>
-            <button class="btn btn-primary" onclick="register()">Register</button>
+
+            <!-- Password Requirements Live Check -->
+            <div class="pwd-rules" id="pwd-rules">
+                <div class="pwd-rule neutral" id="rule-length"><span class="icon">○</span> At least 8 characters</div>
+                <div class="pwd-rule neutral" id="rule-upper"><span class="icon">○</span> At least 1 uppercase letter (A-Z)</div>
+                <div class="pwd-rule neutral" id="rule-lower"><span class="icon">○</span> At least 1 lowercase letter (a-z)</div>
+                <div class="pwd-rule neutral" id="rule-number"><span class="icon">○</span> At least 1 number (0-9)</div>
+                <div class="pwd-rule neutral" id="rule-special"><span class="icon">○</span> At least 1 special character (!@#$%^&*...)</div>
+                <div class="pwd-strength">
+                    <div class="pwd-bar"><div class="pwd-bar-fill" id="pwd-bar-fill" style="width:0%;background:#ff6b6b;"></div></div>
+                    <div style="text-align:right;font-size:0.8em;margin-top:4px;color:#888;" id="pwd-strength-text"></div>
+                </div>
+            </div>
+
+            <button class="btn btn-primary" onclick="register()" id="reg-btn">Register</button>
             <div id="reg-result" class="hidden"></div>
         </div>
     </div>
+
     <script>
+    function checkPassword() {
+        const pwd = document.getElementById('reg-password').value;
+        let score = 0;
+
+        // Length
+        const lenOk = pwd.length >= 8;
+        updateRule('rule-length', lenOk, pwd.length > 0);
+        if (lenOk) score++;
+
+        // Uppercase
+        const upOk = /[A-Z]/.test(pwd);
+        updateRule('rule-upper', upOk, pwd.length > 0);
+        if (upOk) score++;
+
+        // Lowercase
+        const loOk = /[a-z]/.test(pwd);
+        updateRule('rule-lower', loOk, pwd.length > 0);
+        if (loOk) score++;
+
+        // Number
+        const numOk = /[0-9]/.test(pwd);
+        updateRule('rule-number', numOk, pwd.length > 0);
+        if (numOk) score++;
+
+        // Special
+        const spOk = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(pwd);
+        updateRule('rule-special', spOk, pwd.length > 0);
+        if (spOk) score++;
+
+        // Strength bar
+        const fill = document.getElementById('pwd-bar-fill');
+        const text = document.getElementById('pwd-strength-text');
+        const pct = (score / 5) * 100;
+        fill.style.width = pct + '%';
+
+        if (score <= 1) { fill.style.background = '#ff6b6b'; text.textContent = 'Weak'; text.style.color = '#ff6b6b'; }
+        else if (score <= 2) { fill.style.background = '#ff922b'; text.textContent = 'Fair'; text.style.color = '#ff922b'; }
+        else if (score <= 3) { fill.style.background = '#ffd93d'; text.textContent = 'Medium'; text.style.color = '#ffd93d'; }
+        else if (score <= 4) { fill.style.background = '#69db7c'; text.textContent = 'Strong'; text.style.color = '#69db7c'; }
+        else { fill.style.background = '#51cf66'; text.textContent = 'Very Strong ✓'; text.style.color = '#51cf66'; }
+
+        if (pwd.length === 0) { fill.style.width = '0%'; text.textContent = ''; }
+    }
+
+    function updateRule(id, pass, typed) {
+        const el = document.getElementById(id);
+        if (!typed) { el.className = 'pwd-rule neutral'; el.querySelector('.icon').textContent = '○'; return; }
+        if (pass) { el.className = 'pwd-rule pass'; el.querySelector('.icon').textContent = '✓'; }
+        else { el.className = 'pwd-rule fail'; el.querySelector('.icon').textContent = '✗'; }
+    }
+
     async function register() {
         const username = document.getElementById('reg-username').value.trim();
         const email = document.getElementById('reg-email').value.trim();
         const password = document.getElementById('reg-password').value;
         const r = document.getElementById('reg-result');
-        if (!username || !email || !password) { r.className='status-box status-error'; r.textContent='Fill all fields'; return; }
+
+        if (!username || !email || !password) {
+            r.className = 'status-box status-error'; r.textContent = 'Please fill all fields'; return;
+        }
+
+        // Client-side password check
+        const checks = [
+            password.length >= 8,
+            /[A-Z]/.test(password),
+            /[a-z]/.test(password),
+            /[0-9]/.test(password),
+            /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(password)
+        ];
+        if (!checks.every(Boolean)) {
+            r.className = 'status-box status-error';
+            r.textContent = '❌ Password does not meet all requirements. Check the rules above.';
+            return;
+        }
+
         try {
             const res = await fetch('/api/register', {
-                method:'POST', headers:{'Content-Type':'application/json'},
+                method: 'POST', headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({username, email, password})
             });
             const data = await res.json();
             if (res.ok) {
-                r.className='status-box status-success';
-                r.textContent=`✅ Registration Successful!\n\nUsername: ${data.username}\nUser ID: ${data.user_id}\nReset Counter: ${data.reset_counter}\nSession Version: ${data.session_version}\n\nYou can now login.`;
+                r.className = 'status-box status-success';
+                r.textContent = `✅ Registration Successful!\n\nUsername: ${data.username}\nUser ID: ${data.user_id}\nReset Counter: ${data.reset_counter}\nSession Version: ${data.session_version}\nTotal Users: ${data.total_registered_users}\n\nYou can now login.`;
             } else {
-                r.className='status-box status-error';
-                r.textContent=`❌ ${data.detail}`;
+                r.className = 'status-box status-error';
+                r.textContent = `❌ ${data.detail}`;
             }
-        } catch(e) { r.className='status-box status-error'; r.textContent=`❌ Error: ${e.message}`; }
+        } catch(e) { r.className = 'status-box status-error'; r.textContent = `❌ Error: ${e.message}`; }
     }
     </script>
 </body>
