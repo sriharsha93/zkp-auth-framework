@@ -12,6 +12,15 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     reset_counter = Column(Integer, default=0, nullable=False)
     session_version = Column(Integer, default=1, nullable=False)
+
+    # Login lockout fields
+    failed_login_attempts = Column(Integer, default=0, nullable=False)
+    login_locked_until = Column(DateTime(timezone=True), nullable=True)
+
+    # OTP lockout fields
+    failed_otp_attempts = Column(Integer, default=0, nullable=False)
+    otp_locked_until = Column(DateTime(timezone=True), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
