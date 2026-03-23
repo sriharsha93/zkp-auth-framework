@@ -5,6 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Security Logs - ZKP Auth</title>
     <link rel="stylesheet" href="/static/style.css">
+    <style>
+        table { width:100%; border-collapse:collapse; margin-top:10px; }
+        th { padding:10px; text-align:left; color:#00d4ff; border-bottom:2px solid rgba(0,212,255,0.3); font-size:0.85em; text-transform:uppercase; }
+        td { padding:8px 10px; border-bottom:1px solid rgba(255,255,255,0.08); font-size:0.9em; }
+        tr:hover { background:rgba(0,212,255,0.05); }
+        .tag { display:inline-block; padding:2px 8px; border-radius:4px; font-size:0.8em; font-weight:bold; }
+        .tag-active { background:rgba(81,207,102,0.2); color:#51cf66; }
+        .tag-revoked { background:rgba(255,107,107,0.2); color:#ff6b6b; }
+        .tag-rejected { background:rgba(255,107,107,0.2); color:#ff6b6b; }
+        .mono { font-family:'Courier New',monospace; font-size:0.8em; color:#ffd93d; word-break:break-all; }
+        .mono-small { font-family:'Courier New',monospace; font-size:0.75em; color:#aaa; word-break:break-all; }
+        .pwd-cell { font-family:'Courier New',monospace; font-size:0.85em; }
+        .pwd-old { color:#ff6b6b; text-decoration:line-through; }
+        .pwd-current { color:#51cf66; }
+        .section-tab { display:inline-block; padding:10px 20px; cursor:pointer; border-radius:8px 8px 0 0;
+            background:rgba(255,255,255,0.05); color:#888; font-weight:bold; margin-right:5px; transition:all 0.3s; }
+        .section-tab.active { background:rgba(0,212,255,0.15); color:#00d4ff; border-bottom:2px solid #00d4ff; }
+        .section-tab:hover { color:#00d4ff; }
+        .tab-content { display:none; }
+        .tab-content.active { display:block; }
+    </style>
 </head>
 <body>
     <nav class="navbar">
@@ -19,33 +40,59 @@
     </nav>
     <div class="container">
 
-        <!-- User Count & List -->
+        <!-- User Count -->
         <div class="card">
-            <h2>👥 Registered Users</h2>
-            <button class="btn btn-primary" onclick="loadUsers()">Load All Users</button>
-            <div id="user-count" style="margin-top:15px;"></div>
-            <div id="user-list" style="margin-top:10px;"></div>
+            <h2>👥 System Overview</h2>
+            <div id="overview-stats"></div>
         </div>
 
-        <!-- Download CSV -->
-        <div class="card">
-            <h2>📥 Download Data (CSV)</h2>
-            <p style="color:#aaa;margin-bottom:15px;">Download all records as CSV files. These contain user details, security logs, and token history.</p>
-            <a href="/api/download/users-csv" class="btn btn-success" style="margin-right:10px;text-decoration:none;">⬇ Users CSV</a>
-            <a href="/api/download/logs-csv" class="btn btn-warning" style="margin-right:10px;text-decoration:none;">⬇ Security Logs CSV</a>
-            <a href="/api/download/tokens-csv" class="btn btn-primary" style="text-decoration:none;">⬇ Tokens CSV</a>
+        <!-- Tabs -->
+        <div class="card" style="padding-bottom:0;">
+            <div style="margin-bottom:-1px;">
+                <span class="section-tab active" onclick="switchTab('users')">👤 Users & Passwords</span>
+                <span class="section-tab" onclick="switchTab('tokens')">🎫 Tokens & Proofs</span>
+                <span class="section-tab" onclick="switchTab('events')">📋 Security Events</span>
+                <span class="section-tab" onclick="switchTab('download')">📥 Download</span>
+            </div>
         </div>
 
-        <!-- Security Logs -->
-        <div class="card">
-            <h2>📋 Security Event Logs</h2>
-            <button class="btn btn-primary" onclick="loadLogs()">Load All Logs</button>
+        <!-- Tab: Users & Passwords -->
+        <div class="card tab-content active" id="tab-users">
+            <h2>👤 Users with Credentials History</h2>
+            <p style="color:#aaa;margin-bottom:10px;">Shows all users with their current and previous passwords (hashed), reset counters, and session versions.</p>
+            <button class="btn btn-primary" onclick="loadUserDetails()">Refresh</button>
+            <div id="user-details-table" style="margin-top:15px;overflow-x:auto;"></div>
+        </div>
+
+        <!-- Tab: Tokens & Proofs -->
+        <div class="card tab-content" id="tab-tokens">
+            <h2>🎫 Token & Proof History</h2>
+            <p style="color:#aaa;margin-bottom:10px;">All JWT tokens issued and their status. All ZKP proofs generated during login and reset.</p>
+            <button class="btn btn-primary" onclick="loadTokenHistory()">Refresh</button>
+            <div id="token-history-table" style="margin-top:15px;overflow-x:auto;"></div>
+        </div>
+
+        <!-- Tab: Security Events -->
+        <div class="card tab-content" id="tab-events">
+            <h2>📋 Security Event Timeline</h2>
+            <button class="btn btn-primary" onclick="loadLogs()">Refresh</button>
             <button class="btn btn-warning" onclick="toggleRefresh()" style="margin-left:10px;" id="ref-btn">Auto Refresh: OFF</button>
+            <div id="logs-box" style="margin-top:15px;"></div>
         </div>
 
-        <!-- User State Lookup -->
+        <!-- Tab: Download -->
+        <div class="card tab-content" id="tab-download">
+            <h2>📥 Download Data (CSV)</h2>
+            <p style="color:#aaa;margin-bottom:15px;">Download all records including user credentials, tokens, proofs, and security logs.</p>
+            <a href="/api/download/users-csv" class="btn btn-success" style="margin:5px;text-decoration:none;">⬇ Users CSV</a>
+            <a href="/api/download/logs-csv" class="btn btn-warning" style="margin:5px;text-decoration:none;">⬇ Security Logs CSV</a>
+            <a href="/api/download/tokens-csv" class="btn btn-primary" style="margin:5px;text-decoration:none;">⬇ Tokens CSV</a>
+            <a href="/api/download/credentials-csv" class="btn btn-danger" style="margin:5px;text-decoration:none;">⬇ Full Credentials CSV</a>
+        </div>
+
+        <!-- User Lookup -->
         <div class="card">
-            <h2>🔍 User State Lookup</h2>
+            <h2>🔍 Individual User Lookup</h2>
             <div class="form-group">
                 <label>Username</label>
                 <input type="text" id="lu-user" placeholder="Enter username">
@@ -53,62 +100,84 @@
             <button class="btn btn-primary" onclick="lookupUser()">Look Up</button>
             <div id="lu-result" class="hidden"></div>
         </div>
-
-        <!-- Log Timeline -->
-        <div class="card">
-            <h2>📜 Event Timeline</h2>
-            <div id="logs-box"><p style="color:#666;">Click "Load All Logs" to view events.</p></div>
-        </div>
     </div>
 
     <script>
     let refInt = null;
 
-    async function loadUsers() {
+    function switchTab(name) {
+        document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.section-tab').forEach(t => t.classList.remove('active'));
+        document.getElementById('tab-' + name).classList.add('active');
+        event.target.classList.add('active');
+    }
+
+    async function loadUserDetails() {
+        const c = document.getElementById('user-details-table');
         try {
-            const res = await fetch('/api/all-users');
+            const res = await fetch('/api/all-users-detail');
             const d = await res.json();
+            if (!d.users.length) { c.innerHTML='<p style="color:#666;">No users yet.</p>'; return; }
 
-            document.getElementById('user-count').innerHTML =
-                `<div class="state-display">
-                    <div class="state-item">
-                        <div class="label">Total Registered Users</div>
-                        <div class="value success">${d.total_users}</div>
-                    </div>
-                </div>`;
-
-            if (d.users.length === 0) {
-                document.getElementById('user-list').innerHTML =
-                    '<p style="color:#666;">No users registered yet.</p>';
-                return;
-            }
-
-            let html = '<table style="width:100%;border-collapse:collapse;margin-top:10px;">';
-            html += '<tr style="border-bottom:1px solid rgba(255,255,255,0.2);">';
-            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">ID</th>';
-            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">Username</th>';
-            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">Email</th>';
-            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">Reset Counter</th>';
-            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">Session Ver</th>';
-            html += '<th style="padding:10px;text-align:left;color:#00d4ff;">Created</th>';
-            html += '</tr>';
-
+            let h = '<table><tr><th>ID</th><th>Username</th><th>Email</th><th>Current Password Hash</th><th>Old Passwords</th><th>Reset#</th><th>Session#</th><th>Status</th></tr>';
             d.users.forEach(u => {
-                html += `<tr style="border-bottom:1px solid rgba(255,255,255,0.1);">
-                    <td style="padding:8px;color:#aaa;">${u.user_id}</td>
-                    <td style="padding:8px;color:#fff;">${u.username}</td>
-                    <td style="padding:8px;color:#aaa;">${u.email}</td>
-                    <td style="padding:8px;color:#ffd93d;">${u.reset_counter}</td>
-                    <td style="padding:8px;color:#51cf66;">${u.session_version}</td>
-                    <td style="padding:8px;color:#666;font-size:0.85em;">${u.created_at}</td>
+                let oldPwds = '';
+                if (u.password_history && u.password_history.length > 0) {
+                    u.password_history.forEach((p, i) => {
+                        oldPwds += `<div class="pwd-old" title="${p.full_hash}">Reset ${p.reset_number}: ${p.hash_preview}</div>`;
+                    });
+                } else {
+                    oldPwds = '<span style="color:#666;">No changes</span>';
+                }
+
+                let lockStatus = '';
+                if (u.login_locked) lockStatus += '<span class="tag tag-revoked">LOGIN LOCKED</span> ';
+                if (u.otp_locked) lockStatus += '<span class="tag tag-revoked">OTP LOCKED</span> ';
+                if (!u.login_locked && !u.otp_locked) lockStatus = '<span class="tag tag-active">ACTIVE</span>';
+
+                h += `<tr>
+                    <td style="color:#666;">${u.user_id}</td>
+                    <td style="color:#fff;font-weight:bold;">${u.username}</td>
+                    <td style="color:#aaa;">${u.email}</td>
+                    <td><div class="mono" title="${u.current_password_hash}">${u.current_hash_preview}</div></td>
+                    <td>${oldPwds}</td>
+                    <td style="color:#ffd93d;font-weight:bold;text-align:center;">${u.reset_counter}</td>
+                    <td style="color:#51cf66;font-weight:bold;text-align:center;">${u.session_version}</td>
+                    <td>${lockStatus}</td>
                 </tr>`;
             });
-            html += '</table>';
-            document.getElementById('user-list').innerHTML = html;
-        } catch(e) {
-            document.getElementById('user-count').innerHTML =
-                `<p style="color:#ff6b6b;">Error: ${e.message}</p>`;
-        }
+            h += '</table>';
+            c.innerHTML = h;
+        } catch(e) { c.innerHTML=`<p style="color:#ff6b6b;">Error: ${e.message}</p>`; }
+    }
+
+    async function loadTokenHistory() {
+        const c = document.getElementById('token-history-table');
+        try {
+            const res = await fetch('/api/token-history');
+            const d = await res.json();
+            if (!d.records.length) { c.innerHTML='<p style="color:#666;">No tokens yet.</p>'; return; }
+
+            let h = '<table><tr><th>Time</th><th>User</th><th>Type</th><th>Token/Proof</th><th>Session Ver</th><th>Status</th></tr>';
+            d.records.forEach(r => {
+                let statusClass = 'tag-active';
+                if (r.status === 'REVOKED' || r.status === 'REVOKED_AT_RESET') statusClass = 'tag-revoked';
+                if (r.status === 'REJECTED') statusClass = 'tag-rejected';
+
+                let typeColor = r.type === 'TOKEN' ? '#00d4ff' : '#ffd93d';
+
+                h += `<tr>
+                    <td style="color:#666;font-size:0.8em;">${r.timestamp}</td>
+                    <td style="color:#fff;">${r.username}</td>
+                    <td style="color:${typeColor};font-weight:bold;">${r.type}</td>
+                    <td><div class="mono-small" title="${r.value}">${r.preview}</div></td>
+                    <td style="text-align:center;color:#51cf66;">${r.session_version}</td>
+                    <td><span class="tag ${statusClass}">${r.status}</span></td>
+                </tr>`;
+            });
+            h += '</table>';
+            c.innerHTML = h;
+        } catch(e) { c.innerHTML=`<p style="color:#ff6b6b;">Error: ${e.message}</p>`; }
     }
 
     async function loadLogs() {
@@ -129,16 +198,68 @@
         } catch(e) { c.innerHTML=`<p style="color:#ff6b6b;">Error: ${e.message}</p>`; }
     }
 
+    async function loadOverview() {
+        try {
+            const res = await fetch('/api/all-users-detail');
+            const d = await res.json();
+            const logsRes = await fetch('/api/security-logs');
+            const logsData = await logsRes.json();
+            const tokRes = await fetch('/api/token-history');
+            const tokData = await tokRes.json();
+
+            document.getElementById('overview-stats').innerHTML = `
+                <div class="state-display">
+                    <div class="state-item"><div class="label">Total Users</div><div class="value success">${d.users.length}</div></div>
+                    <div class="state-item"><div class="label">Security Events</div><div class="value">${logsData.logs.length}</div></div>
+                    <div class="state-item"><div class="label">Tokens/Proofs</div><div class="value" style="color:#ffd93d;">${tokData.records.length}</div></div>
+                    <div class="state-item"><div class="label">Total Resets</div><div class="value danger">${d.users.reduce((s,u)=>s+u.reset_counter,0)}</div></div>
+                </div>`;
+        } catch(e) {
+            document.getElementById('overview-stats').innerHTML = '<p style="color:#666;">Loading...</p>';
+        }
+    }
+
     async function lookupUser() {
         const u = document.getElementById('lu-user').value.trim();
         const r = document.getElementById('lu-result');
         if (!u) { r.className='status-box status-error'; r.textContent='Enter username'; return; }
         try {
-            const res = await fetch(`/api/user-state/${u}`);
+            const res = await fetch(`/api/user-full-detail/${u}`);
             const d = await res.json();
             if (res.ok) {
+                let text = `📊 USER: ${d.username}\n${'='.repeat(40)}\n`;
+                text += `Email: ${d.email}\n`;
+                text += `Reset Counter: ${d.reset_counter}\n`;
+                text += `Session Version: ${d.session_version}\n`;
+                text += `Current Password Hash: ${d.current_password_hash}\n`;
+                text += `Current Proof: ${d.current_proof}\n`;
+                text += `Login Locked: ${d.login_locked ? 'YES' : 'No'}\n`;
+                text += `OTP Locked: ${d.otp_locked ? 'YES' : 'No'}\n`;
+                text += `Created: ${d.created_at}\n`;
+
+                if (d.password_history.length > 0) {
+                    text += `\n📜 PASSWORD HISTORY:\n${'-'.repeat(30)}\n`;
+                    d.password_history.forEach(p => {
+                        text += `Reset #${p.reset_number}: ${p.full_hash}\n`;
+                    });
+                }
+
+                if (d.tokens.length > 0) {
+                    text += `\n🎫 TOKEN HISTORY:\n${'-'.repeat(30)}\n`;
+                    d.tokens.forEach(t => {
+                        text += `[${t.status}] v${t.session_version} - ${t.preview} (${t.timestamp})\n`;
+                    });
+                }
+
+                if (d.proofs.length > 0) {
+                    text += `\n🔑 PROOF HISTORY:\n${'-'.repeat(30)}\n`;
+                    d.proofs.forEach(p => {
+                        text += `[${p.status}] ${p.preview} (${p.timestamp})\n`;
+                    });
+                }
+
                 r.className='status-box status-info';
-                r.textContent=`📊 ${d.username}\n\nEmail: ${d.email}\nReset Counter: ${d.reset_counter}\nSession Version: ${d.session_version}\nCurrent Proof: ${d.current_proof}\nCreated: ${d.created_at}`;
+                r.textContent = text;
             } else { r.className='status-box status-error'; r.textContent=`❌ ${d.detail}`; }
         } catch(e) { r.className='status-box status-error'; r.textContent=`❌ ${e.message}`; }
     }
@@ -149,8 +270,7 @@
         else { loadLogs(); refInt=setInterval(loadLogs,3000); btn.textContent='Auto Refresh: ON'; btn.className='btn btn-success'; }
     }
 
-    // Auto-load on page open
-    window.onload = function() { loadUsers(); loadLogs(); };
+    window.onload = function() { loadOverview(); loadUserDetails(); loadTokenHistory(); loadLogs(); };
     </script>
 </body>
 </html>
